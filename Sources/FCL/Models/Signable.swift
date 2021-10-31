@@ -230,7 +230,7 @@ struct Interaction: Encodable {
 
         return Flow.TransactionProposalKey(address: Flow.Address(hex: address),
                                            keyIndex: keyID,
-                                           sequenceNumber: BigUInt(account.sequenceNum ?? 0))
+                                           sequenceNumber: BigInt(account.sequenceNum ?? 0))
     }
 }
 

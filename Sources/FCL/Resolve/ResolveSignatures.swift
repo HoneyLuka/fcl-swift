@@ -117,7 +117,7 @@ extension FCL {
             return nil
         }
 
-        var tx = try flow.buildTransaction(fetchSequenceNumber: false) {
+        var tx = try flow.buildTransaction {
             cadence {
                 ix.message.cadence ?? ""
             }

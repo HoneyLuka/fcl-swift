@@ -15,7 +15,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(name: "Flow", url: "https://github.com/zed-io/flow-swift.git", .revision("75814ba057e8fbef4a1eaef3bedfbabb9cda0953")),
+        .package(name: "Flow", url: "https://github.com/zed-io/flow-swift.git", from: "0.1.1-beta"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.0.0")
     ],
     targets: [
@@ -27,7 +27,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FCLTests",
-            dependencies: ["FCL"],
+            dependencies: ["FCL", "Flow"],
             path: "Tests"
         )
     ]

@@ -118,7 +118,7 @@ public final class FCL: NSObject {
                     } receiveValue: { ix in
                         do {
                             let tx = try self.toFlowTransaction(ix: ix)
-                            let txId = try flow.sendTransaction(signedTrnaction: tx!).wait()
+                            let txId = try flow.sendTransaction(signedTransaction: tx!).wait()
                             print(txId.hex)
                             promise(.success(txId.hex))
                         } catch {
