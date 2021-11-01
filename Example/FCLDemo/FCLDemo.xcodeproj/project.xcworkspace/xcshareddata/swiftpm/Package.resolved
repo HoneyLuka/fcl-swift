@@ -29,7 +29,7 @@
         }
       },
       {
-        "package": "flow-swift",
+        "package": "Flow",
         "repositoryURL": "https://github.com/zed-io/flow-swift.git",
         "state": {
           "branch": "de8e14e0e",
@@ -101,7 +101,7 @@
         }
       },
       {
-        "package": "swift-protobuf",
+        "package": "SwiftProtobuf",
         "repositoryURL": "https://github.com/apple/swift-protobuf.git",
         "state": {
           "branch": null,
