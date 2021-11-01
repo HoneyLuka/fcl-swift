@@ -3,6 +3,7 @@ import BigInt
 import Combine
 import Flow
 import SafariServices
+import NIO
 
 public let fcl = FCL.shared
 
@@ -18,6 +19,11 @@ public final class FCL: NSObject {
     private var session: ASWebAuthenticationSession?
 
     private let api = API()
+    
+    private lazy var evGroup: MultiThreadedEventLoopGroup = {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+        return group
+    }()
 
     @Published var currentUser: User?
 
@@ -68,65 +74,80 @@ public final class FCL: NSObject {
                 return
             }
 
-            guard let service = self.serviceOfType(services: currentUser.services, type: .preAuthz),
-                  let endpoint = service.endpoint else {
-                return
-            }
-
-            let call = flow.accessAPI.getLatestBlock(sealed: true)
-
-            call.whenSuccess { block in
-                let blockId = block.id.hex
-                var object = presignable
-                object.interaction.message.refBlock = blockId
-                var preSignableObject = object
-                let data = try! JSONEncoder().encode(preSignableObject)
-                self.api.execHttpPost(url: endpoint, params: service.params, data: data)
-                    .flatMap { response -> AnyPublisher<Interaction, Error> in
-                        let signableUsers = self.resolvePreAuthz(resp: response)
-                        var accounts = [String: SignableUser]()
-                        preSignableObject.interaction.authorizations.removeAll()
-                        signableUsers.forEach { user in
-                            let tempID = [user.addr!, String(user.keyID!)].joined(separator: "-")
-                            var temp = user
-                            temp.tempID = tempID
-
-                            if accounts.keys.contains(tempID) {
-                                accounts[tempID]?.role.merge(role: temp.role)
-                            }
-                            accounts[tempID] = temp
-
-                            if user.role.proposer {
-                                preSignableObject.interaction.proposer = tempID
-                            }
-
-                            if user.role.payer {
-                                preSignableObject.interaction.payer = tempID
-                            }
-
-                            if user.role.authorizer {
-                                preSignableObject.interaction.authorizations.append(tempID)
-                            }
-                        }
-
-                        preSignableObject.interaction.accounts = accounts
-                        return self.resolveSignatures(interaction: preSignableObject.interaction).eraseToAnyPublisher()
-                    }.sink { completion in
-                        if case let .failure(error) = completion {
-                            print(error)
-                        }
-                    } receiveValue: { ix in
-                        do {
-                            let tx = try self.toFlowTransaction(ix: ix)
-                            let txId = try flow.sendTransaction(signedTransaction: tx!).wait()
-                            print(txId.hex)
-                            promise(.success(txId.hex))
-                        } catch {
-                            print(error)
-                        }
-                    }.store(in: &self.cancellables)
+            flow.accessAPI.getLatestBlock(sealed: true).flatMap { block -> EventLoopFuture<Interaction> in
+                return self.comsume(block: block, presignable: presignable)
+            }.flatMap { ix -> EventLoopFuture<Flow.ID> in
+                guard let tx = try? self.toFlowTransaction(ix: ix) else {
+                    return self.evGroup.next().makeFailedFuture(FCLError.generic)
+                }
+                
+                return try! flow.sendTransaction(signedTransaction: tx)
+            }.whenComplete { result in
+                switch result {
+                case .success(let txId):
+                    promise(.success(txId.hex))
+                case .failure(let err):
+                    promise(.failure(err))
+                }
             }
         }
+    }
+    
+    private func comsume(block: Flow.Block, presignable: PreSignable) -> EventLoopFuture<Interaction> {
+        let ev = evGroup.next()
+        let promise = ev.makePromise(of: Interaction.self)
+        
+        guard let service = service(forType: .authz), let endpoint = service.endpoint else {
+            return ev.makeFailedFuture(FCLError.generic)
+        }
+        
+        let blockId = block.id.hex
+        var object = presignable
+        object.interaction.message.refBlock = blockId
+        guard let data = try? JSONEncoder().encode(object) else {
+            return ev.makeFailedFuture(FCLError.generic)
+        }
+        
+        self.api.execHttpPost(url: endpoint, params: service.params, data: data)
+            .flatMap { response -> Future<Interaction, Error> in
+                let signableUsers = self.resolvePreAuthz(resp: response)
+                var accounts = [String: SignableUser]()
+                object.interaction.authorizations.removeAll()
+                signableUsers.forEach { user in
+                    let tempID = [user.addr!, String(user.keyID!)].joined(separator: "-")
+                    var temp = user
+                    temp.tempID = tempID
+
+                    if accounts.keys.contains(tempID) {
+                        accounts[tempID]?.role.merge(role: temp.role)
+                    }
+                    accounts[tempID] = temp
+
+                    if user.role.proposer {
+                        object.interaction.proposer = tempID
+                    }
+
+                    if user.role.payer {
+                        object.interaction.payer = tempID
+                    }
+
+                    if user.role.authorizer {
+                        object.interaction.authorizations.append(tempID)
+                    }
+                }
+
+                object.interaction.accounts = accounts
+                return self.resolveSignatures(interaction: object.interaction)
+            }.sink { completion in
+                if case let .failure(error) = completion {
+                    print(error)
+                    promise.fail(error)
+                }
+            } receiveValue: { ix in
+                promise.succeed(ix)
+            }.store(in: &cancellables)
+        
+        return promise.futureResult
     }
 
     func resolvePreAuthz(resp: AuthnResponse) -> [SignableUser] {
@@ -167,8 +188,7 @@ public final class FCL: NSObject {
                 return
             }
 
-            guard let service = self.serviceOfType(services: currentUser.services, type: .authz),
-                  let url = service.endpoint else {
+            guard let url = self.service(forType: .authz)?.endpoint else {
                 return
             }
 
@@ -233,9 +253,13 @@ public final class FCL: NSObject {
                     loggedIn: true,
                     services: authn.data?.services)
     }
-
-    private func serviceOfType(services: [Service]?, type: FCLServiceType) -> Service? {
-        return services?.first(where: { service in
+    
+    private func service(forType type: FCLServiceType) -> Service? {
+        guard let services = currentUser?.services else {
+            return nil
+        }
+        
+        return services.first(where: { service in
             service.type == type
         })
     }
